@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live USDT Screener</title>
+  <style>
+    body {
+      background: #1e1e1e;
+      color: #eee;
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    input, select, button {
+      margin: 6px;
+      padding: 6px;
+      background: #2b2b2b;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 4px;
+    }
+    .coin-row {
+      background: #333;
+      padding: 8px;
+      border-radius: 5px;
+      margin-top: 10px;
+    }
+    .coin-row span {
+      display: block;
+    }
+    .coin-row .actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .popup {
+      position: fixed;
+      top: 10%;
+      left: 5%;
+      width: 90%;
+      height: 80%;
+      background: black;
+      display: none;
+      border-radius: 10px;
+      z-index: 1000;
+    }
+    .popup iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    .close-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: red;
+      color: white;
+      padding: 4px 8px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      z-index: 1001;
+    }
+  </style>
+</head>
+<body>
+  <h2>Live USDT Screener</h2>
+  <div id="timestamp"></div><br>
+  <div>
+  <!--  <p><strong>Note:</strong> If you see a "Failed to fetch" error, it may be due to network or CORS restrictions in your browser or local environment. Consider testing this page from a hosted environment or using a CORS proxy like <a href="https://corsproxy.io/" style="color:#4dd0e1">https://corsproxy.io/</a>.</p>
+    --> <!-- Filter inputs -->
+    <label>Market Cap From (Millions):</label><br>
+    <input id="mcapMin" type="number" value="10"><br>
+    <label>To:</label><br>
+    <input id="mcapMax" type="number" value="500"><br><br><br>
+
+    <label>Volume 24h From (Millions):</label><br>
+    <input id="volMin" type="number" value="5"><br>
+    <label>To:</label><br>
+    <input id="volMax" type="number" value="150"><br><br><br>
+
+    <label>Price Change 24h (%):</label>
+    <input type="range" id="priceMin" min="-20" max="40" value="-20" oninput="document.getElementById('minLabel').innerText = this.value">
+    <span id="minLabel">-20</span>
+    <input type="range" id="priceMax" min="-20" max="200" value="20" oninput="document.getElementById('maxLabel').innerText = this.value">
+    <span id="maxLabel">20</span>
+
+    <br />
+    <label>Timeframe:</label>
+    <select id="timeframe">
+      <option value="15">15m</option>
+      <option value="30">30m</option>
+      <option value="60">1h</option>
+      <option value="240">4h</option>
+      <option value="1D">1D</option>
+    </select>
+
+    <br />
+    <input type="checkbox" id="lowerLows"> <label for="lowerLows">Consecutive Lower Close Prices</label>
+    <input type="number" id="lowerCount" value="2" min="2">
+    <br />
+    <input type="checkbox" id="higherHighs"> <label for="higherHighs">Consecutive Higher Close Prices</label>
+    <input type="number" id="higherCount" value="2" min="2">
+
+    <br />
+    <button onclick="runScreener()">Filter</button>
+  </div>
+
+  <div id="results"></div>
+
+  <div class="popup" id="popup">
+    <button class="close-btn" onclick="document.getElementById('popup').style.display='none';document.getElementById('popupFrame').src='';">✖</button>
+    <iframe id="popupFrame" allowfullscreen></iframe>
+  </div>
+
+  <script>
+    function updateTimestamp() {
+      const now = new Date();
+      const utc4 = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+      document.getElementById('timestamp').innerHTML = `<strong>UTC-4 Time:</strong> ${utc4.toUTCString()}`;
+    }
+
+    updateTimestamp();
+    setInterval(updateTimestamp, 60000);
+
+    async function safeFetch(url) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        return await response.json();
+      } catch (error) {
+        console.error('Fetch failed for URL:', url, error);
+        alert(`⚠️ Error fetching data from: ${url}\n${error.message}`);
+        return null;
+      }
+    }
+
+    async function getCoinGeckoData() {
+      return await safeFetch("https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=250&page=1&sparkline=false");
+    }
+
+    async function getKlines(symbol, interval = '1h', limit = 20) {
+      return await safeFetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    }
+
+    function openChart(symbol, tf) {
+      const frame = document.getElementById('popupFrame');
+      document.getElementById('popup').style.display = 'block';
+      frame.src = `https://s.tradingview.com/widgetembed/?frameElementId=popupFrame&symbol=BINANCE:${symbol}&interval=${tf}&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&studies_overrides={}`;
+    }
+
+    function formatMarketCap(value) {
+      return value >= 1e9 ? (value / 1e9).toFixed(2) + ' Billion' : (value / 1e6).toFixed(2) + ' Million';
+    }
+
+    async function runScreener() {
+      const mcapMin = +document.getElementById('mcapMin').value * 1e6;
+      const mcapMax = +document.getElementById('mcapMax').value * 1e6;
+      const volMin = +document.getElementById('volMin').value * 1e6;
+      const volMax = +document.getElementById('volMax').value * 1e6;
+      const priceMin = +document.getElementById('priceMin').value;
+      const priceMax = +document.getElementById('priceMax').value;
+      const tf = document.getElementById('timeframe').value;
+
+      const checkLows = document.getElementById('lowerLows').checked;
+      const checkHighs = document.getElementById('higherHighs').checked;
+      const nLows = +document.getElementById('lowerCount').value;
+      const nHighs = +document.getElementById('higherCount').value;
+
+      const results = document.getElementById('results');
+      results.innerHTML = '⏳ Fetching data...';
+
+      const geckoCoins = await getCoinGeckoData();
+      const binanceSymbolsInfo = await safeFetch("https://api.binance.com/api/v3/ticker/24hr");
+      if (!geckoCoins || !binanceSymbolsInfo) {
+        results.innerHTML = '❌ Failed to load data. Please try again later.';
+        return;
+      }
+
+      const binanceUSDT = binanceSymbolsInfo.filter(c => c.symbol.endsWith("USDT"));
+      const symbolToVolumeRank = Object.fromEntries(
+        binanceUSDT
+          .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+          .map((s, i) => [s.symbol, i + 1])
+      );
+
+      const binanceSymbols = new Set(Object.keys(symbolToVolumeRank));
+      const filteredCoins = [];
+
+      for (const coin of geckoCoins) {
+        const symbol = (coin.symbol + "USDT").toUpperCase();
+        if (!binanceSymbols.has(symbol)) continue;
+
+        const marketCap = coin.market_cap;
+        const volume = coin.total_volume;
+        const priceChange = coin.price_change_percentage_24h;
+        const rank = symbolToVolumeRank[symbol];
+
+        if (
+          marketCap < mcapMin || marketCap > mcapMax ||
+          volume < volMin || volume > volMax ||
+          priceChange < priceMin || priceChange > priceMax
+        ) continue;
+
+        const candles = await getKlines(symbol, tf, Math.max(nLows, nHighs) + 5);
+        if (!candles) continue;
+
+        const closes = candles.map(c => parseFloat(c[4]));
+        let pass = true;
+
+        if (checkLows) {
+          for (let i = 1; i < nLows; i++) {
+            if (closes[closes.length - i] >= closes[closes.length - i - 1]) {
+              pass = false;
+              break;
+            }
+          }
+        }
+
+        if (checkHighs && pass) {
+          for (let i = 1; i < nHighs; i++) {
+            if (closes[closes.length - i] <= closes[closes.length - i - 1]) {
+              pass = false;
+              break;
+            }
+          }
+        }
+
+        if (pass) {
+          filteredCoins.push({ symbol, marketCap, volume, priceChange, rank });
+        }
+      }
+
+      filteredCoins.sort((a, b) => a.rank - b.rank);
+      results.innerHTML = '';
+
+      for (const coin of filteredCoins) {
+        const row = document.createElement('div');
+        row.className = 'coin-row';
+        row.innerHTML = `
+          <div class="actions">
+            <span><strong>${coin.symbol}</strong> (Volume Rank: #${coin.rank})</span>
+            <button onclick="openChart('${coin.symbol}', '${tf}')">View</button>
+          </div>
+          <div>
+            <small>Market Cap: <strong>${formatMarketCap(coin.marketCap)}</strong></small><br>
+            <small>Volume (24h): <strong>${formatMarketCap(coin.volume)}</strong></small><br>
+            <small>Change (24h): <strong>${coin.priceChange.toFixed(2)}%</strong></small>
+          </div>
+        `;
+        results.appendChild(row);
+      }
+    }
+  </script>
+</body>
+</html>
