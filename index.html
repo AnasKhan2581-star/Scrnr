@@ -11,7 +11,6 @@
       font-family: Arial, sans-serif;
       padding: 20px;
     }
-
     .warning {
       background: #ff6b35;
       color: white;
@@ -21,7 +20,6 @@
       text-align: center;
       font-weight: bold;
     }
-
     input, select, button {
       margin: 6px;
       padding: 6px;
@@ -30,7 +28,6 @@
       border: 1px solid #555;
       border-radius: 4px;
     }
-
     .breakout-btn {
       background: #4CAF50;
       color: white;
@@ -41,57 +38,43 @@
       font-size: 16px;
       margin: 10px 0;
     }
-
-    .breakout-btn:hover {
-      background: #45a049;
-    }
-
+    .breakout-btn:hover { background: #45a049; }
     .coin-row {
       background: #333;
       padding: 8px;
       border-radius: 5px;
       margin-top: 10px;
     }
-
     .coin-row.breakout {
       background: #2d4a2d;
       border-left: 4px solid #4CAF50;
     }
-
-    .coin-row span {
-      display: block;
-    }
-
+    .coin-row span { display: block; }
     .coin-row .actions {
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
-
     .technical-indicators {
       display: flex;
       gap: 15px;
       margin-top: 5px;
       flex-wrap: wrap;
     }
-
     .indicator {
       background: #444;
       padding: 4px 8px;
       border-radius: 3px;
       font-size: 12px;
     }
-
     .indicator.bullish {
       background: #2d4a2d;
       color: #4CAF50;
     }
-
     .indicator.bearish {
       background: #4a2d2d;
       color: #f44336;
     }
-
     .loading {
       text-align: center;
       padding: 20px;
@@ -139,7 +122,7 @@
       <option value="1h">1h</option>
       <option value="4h">4h</option>
       <option value="1d">1D</option>
-      <option value="1w">1W</option> <!-- Weekly timeframe added -->
+      <option value="1w">1W</option>
     </select>
 
     <br />
@@ -165,7 +148,6 @@
       const utc4 = new Date(now.getTime() - 4 * 60 * 60 * 1000);
       document.getElementById('timestamp').innerHTML = `<strong>UTC-4 Time:</strong> ${utc4.toUTCString()}`;
     }
-
     updateTimestamp();
     setInterval(updateTimestamp, 60000);
 
@@ -240,11 +222,9 @@
       const recent = highs.slice(-period);
       const recentVolume = volume.slice(-period);
       const avgVolume = recentVolume.reduce((a, b) => a + b, 0) / recentVolume.length;
-      // Find resistance level (recent high)
       const resistanceLevel = Math.max(...recent.slice(0, -3));
       const currentPrice = closes[closes.length - 1];
       const currentVolume = volume[volume.length - 1];
-      // Check if price broke above resistance with volume
       return currentPrice > resistanceLevel && currentVolume > avgVolume * 1.2;
     }
 
@@ -265,16 +245,100 @@
       }
     }
 
+    // Candle logic helpers
+    function hasConsecutiveLowerCloses(closes, count) {
+      for (let i = closes.length - count; i < closes.length - 1; i++) {
+        if (closes[i] <= closes[i+1]) return false;
+      }
+      return true;
+    }
+    function hasConsecutiveHigherCloses(closes, count) {
+      for (let i = closes.length - count; i < closes.length - 1; i++) {
+        if (closes[i] >= closes[i+1]) return false;
+      }
+      return true;
+    }
+
+    // FILTER SCREEN
+    async function runScreener() {
+      const mcapMin = +document.getElementById('mcapMin').value * 1e6;
+      const mcapMax = +document.getElementById('mcapMax').value * 1e6;
+      const volMin = +document.getElementById('volMin').value * 1e6;
+      const volMax = +document.getElementById('volMax').value * 1e6;
+      const priceMin = +document.getElementById('priceMin').value;
+      const priceMax = +document.getElementById('priceMax').value;
+      const tf = document.getElementById('timeframe').value;
+
+      const lowerLowsChecked = document.getElementById('lowerLows').checked;
+      const lowerCount = +document.getElementById('lowerCount').value;
+      const higherHighsChecked = document.getElementById('higherHighs').checked;
+      const higherCount = +document.getElementById('higherCount').value;
+
+      const results = document.getElementById('results');
+      results.innerHTML = '⏳ Fetching data...';
+
+      const binanceSymbols = new Set(Object.keys(symbolToVolumeRank));
+      const filteredCoins = [];
+
+      for (const coin of geckoCoins) {
+        const symbol = (coin.symbol + "USDT").toUpperCase();
+        if (!binanceSymbols.has(symbol)) continue;
+
+        const marketCap = coin.market_cap;
+        const volume = coin.total_volume;
+        const priceChange = coin.price_change_percentage_24h;
+        const rank = symbolToVolumeRank[symbol];
+
+        if (
+          marketCap < mcapMin || marketCap > mcapMax ||
+          volume < volMin || volume > volMax ||
+          priceChange < priceMin || priceChange > priceMax
+        ) continue;
+
+        // Candle filter logic
+        if (lowerLowsChecked || higherHighsChecked) {
+          const klineData = await getKlineData(symbol, tf, Math.max(lowerCount, higherCount));
+          const closes = klineData.map(k => k.close);
+          let pass = true;
+          if (lowerLowsChecked && !hasConsecutiveLowerCloses(closes, lowerCount)) pass = false;
+          if (higherHighsChecked && !hasConsecutiveHigherCloses(closes, higherCount)) pass = false;
+          if (!pass) continue;
+        }
+
+        filteredCoins.push({ symbol, marketCap, volume, priceChange, rank });
+      }
+
+      filteredCoins.sort((a, b) => a.rank - b.rank);
+
+      results.innerHTML = '';
+      for (const coin of filteredCoins) {
+        const row = document.createElement('div');
+        row.className = 'coin-row';
+        row.innerHTML = `
+          <div class="actions">
+            <span><strong>${coin.symbol}</strong> (Volume Rank: #${coin.rank})</span>
+            <button onclick="window.open('https://www.tradingview.com/chart/?symbol=BINANCE:${coin.symbol}&interval=${tf}', '_blank')">View</button>
+          </div>
+          <div>
+            <small>Market Cap: <strong>${formatMarketCap(coin.marketCap)}</strong></small><br>
+            <small>Volume (24h): <strong>${formatMarketCap(coin.volume)}</strong></small><br>
+            <small>Change (24h): <strong>${coin.priceChange.toFixed(2)}%</strong></small>
+          </div>
+        `;
+        results.appendChild(row);
+      }
+    }
+
+    // BREAKOUT SCREEN (unchanged)
     async function findBreakouts() {
       const results = document.getElementById('results');
       const timeframe = document.getElementById('timeframe').value;
 
       results.innerHTML = '<div class="loading">🔍 Analyzing breakout patterns... This may take a moment.</div>';
 
-      const binanceSymbols = Object.keys(symbolToVolumeRank).slice(0, 50); // Limit to top 50 for performance
+      const binanceSymbols = Object.keys(symbolToVolumeRank).slice(0, 50);
       const breakoutCoins = [];
 
-      // Get filter values from UI
       const mcapMin = +document.getElementById('mcapMin').value * 1e6;
       const mcapMax = +document.getElementById('mcapMax').value * 1e6;
       const volMin = +document.getElementById('volMin').value * 1e6;
@@ -300,7 +364,6 @@
           const currentStochRSI = stochRSI[stochRSI.length - 1];
           const isBreakout = detectResistanceBreakout(highs, closes, volumes);
 
-          // Breakout criteria
           if (isBreakout && currentRSI > 50 && currentStochRSI > 20) {
             const baseSymbol = symbol.replace('USDT', '');
             const coinInfo = symbolToCoin[baseSymbol];
@@ -309,7 +372,6 @@
               const volume = coinInfo.total_volume;
               const priceChange = coinInfo.price_change_percentage_24h;
 
-              // All filter conditions must be true
               if (
                 marketCap >= mcapMin &&
                 marketCap <= mcapMax &&
@@ -329,14 +391,12 @@
               }
             }
           }
-          // Small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 100));
         } catch (error) {
           console.error(`Error analyzing ${symbol}:`, error);
         }
       }
 
-      // Sort by volume rank
       breakoutCoins.sort((a, b) => a.rank - b.rank);
 
       results.innerHTML = '';
@@ -375,6 +435,10 @@
       });
     }
 
+    function formatMarketCap(value) {
+      return value >= 1e9 ? (value / 1e9).toFixed(2) + ' Billion' : (value / 1e6).toFixed(2) + ' Million';
+    }
+
     async function searchCoin() {
       const input = document.getElementById("searchInput").value.trim().toUpperCase();
       const tf = document.getElementById("timeframe").value;
@@ -385,10 +449,10 @@
         results.innerHTML = `<div class='coin-row'>Coin ${input} not found.</div>`;
         return;
       }
+
       const symbol = (coin.symbol + "USDT").toUpperCase();
       const rank = symbolToVolumeRank[symbol] || 'N/A';
 
-      // Get technical indicators for searched coin
       const klineData = await getKlineData(symbol, tf, 100);
       let rsi = null, stochRSI = null;
 
@@ -427,64 +491,6 @@
         ` : ''}
       `;
       results.appendChild(row);
-    }
-
-    function formatMarketCap(value) {
-      return value >= 1e9 ? (value / 1e9).toFixed(2) + ' Billion' : (value / 1e6).toFixed(2) + ' Million';
-    }
-
-    async function runScreener() {
-      const mcapMin = +document.getElementById('mcapMin').value * 1e6;
-      const mcapMax = +document.getElementById('mcapMax').value * 1e6;
-      const volMin = +document.getElementById('volMin').value * 1e6;
-      const volMax = +document.getElementById('volMax').value * 1e6;
-      const priceMin = +document.getElementById('priceMin').value;
-      const priceMax = +document.getElementById('priceMax').value;
-      const tf = document.getElementById('timeframe').value;
-
-      const results = document.getElementById('results');
-      results.innerHTML = '⏳ Fetching data...';
-
-      const binanceSymbols = new Set(Object.keys(symbolToVolumeRank));
-      const filteredCoins = [];
-
-      for (const coin of geckoCoins) {
-        const symbol = (coin.symbol + "USDT").toUpperCase();
-        if (!binanceSymbols.has(symbol)) continue;
-
-        const marketCap = coin.market_cap;
-        const volume = coin.total_volume;
-        const priceChange = coin.price_change_percentage_24h;
-        const rank = symbolToVolumeRank[symbol];
-
-        if (
-          marketCap < mcapMin || marketCap > mcapMax ||
-          volume < volMin || volume > volMax ||
-          priceChange < priceMin || priceChange > priceMax
-        ) continue;
-
-        filteredCoins.push({ symbol, marketCap, volume, priceChange, rank });
-      }
-
-      filteredCoins.sort((a, b) => a.rank - b.rank);
-
-      results.innerHTML = '';
-      for (const coin of filteredCoins) {
-        const row = document.createElement('div');
-        row.className = 'coin-row';
-        row.innerHTML = `
-          <div class="actions">
-            <span><strong>${coin.symbol}</strong> (Volume Rank: #${coin.rank})</span>
-            <button onclick="window.open('https://www.tradingview.com/chart/?symbol=BINANCE:${coin.symbol}&interval=${tf}', '_blank')">View</button>
-          </div>
-          <div>
-            <small>Market Cap: <strong>${formatMarketCap(coin.marketCap)}</strong></small><br>
-            <small>Volume (24h): <strong>${formatMarketCap(coin.volume)}</strong></small><br>
-            <small>Change (24h): <strong>${coin.priceChange.toFixed(2)}%</strong></small>
-          </div>
-        `;
-        results.appendChild(row);
-      }
     }
 
     getCoinGeckoData();
